@@ -3,12 +3,11 @@ use {
     log::{debug, info, trace, warn},
     paladin_lockup_program::state::LockupPool,
     solana_account::ReadableAccount,
-    solana_keypair::Keypair,
     solana_metrics::datapoint_info,
     solana_perf::packet::PacketBatch,
     solana_poh::poh_recorder::PohRecorder,
     solana_pubkey::{pubkey, Pubkey},
-    solana_sdk::account::AccountSharedData,
+    solana_sdk::{account::AccountSharedData, signature::Keypair},
     solana_streamer::{
         nonblocking::quic::{ConnectionPeerType, ConnectionTable},
         quic::{EndpointKeyUpdater, QuicServerParams, QuicVariant, SpawnServerResult},
@@ -43,7 +42,8 @@ pub struct P3Quic<T = Arc<RwLock<PohRecorder>>> {
     staked_connection_table: Arc<Mutex<ConnectionTable>>,
     reg_packet_rx: crossbeam_channel::Receiver<PacketBatch>,
     mev_packet_rx: crossbeam_channel::Receiver<PacketBatch>,
-    packet_tx: crossbeam_channel::Sender<PacketBatch>,
+    normal_packet_tx: crossbeam_channel::Sender<PacketBatch>,
+    mev_packet_tx: crossbeam_channel::Sender<PacketBatch>,
 
     metrics: P3Metrics,
     metrics_creation: Instant,
@@ -55,7 +55,8 @@ where
 {
     pub fn spawn(
         exit: Arc<AtomicBool>,
-        packet_tx: crossbeam_channel::Sender<PacketBatch>,
+        normal_p3_packet_tx: crossbeam_channel::Sender<PacketBatch>,
+        mev_p3_packet_tx: crossbeam_channel::Sender<PacketBatch>,
         poh_recorder: T,
         keypair: &Keypair,
         (p3_socket, p3_mev_socket): (SocketAddr, SocketAddr),
@@ -139,7 +140,8 @@ where
             staked_connection_table,
             reg_packet_rx,
             mev_packet_rx,
-            packet_tx,
+            normal_packet_tx: normal_p3_packet_tx,
+            mev_packet_tx: mev_p3_packet_tx,
 
             metrics: P3Metrics::default(),
             metrics_creation: Instant::now(),
@@ -206,13 +208,12 @@ where
         self.metrics.p3_forwarded += len;
 
         for mut packet in packets.iter_mut() {
-            packet.meta_mut().set_p3(true);
             // NB: Unset the staked node flag to prevent forwarding.
             packet.meta_mut().set_from_staked_node(false);
         }
 
         // Forward for verification & inclusion.
-        if let Err(TrySendError::Full(_)) = self.packet_tx.try_send(packets) {
+        if let Err(TrySendError::Full(_)) = self.normal_packet_tx.try_send(packets) {
             self.metrics.p3_dropped += len;
         }
     }
@@ -221,15 +222,13 @@ where
         let len = packets.len() as u64;
         self.metrics.mev_forwarded += len;
 
-        // Set drop on revert flag.
         for mut packet in packets.iter_mut() {
-            packet.meta_mut().set_mev(true);
             // NB: Unset the staked node flag to prevent forwarding.
             packet.meta_mut().set_from_staked_node(false);
         }
 
         // Forward for verification & inclusion.
-        if let Err(TrySendError::Full(_)) = self.packet_tx.try_send(packets) {
+        if let Err(TrySendError::Full(_)) = self.mev_packet_tx.try_send(packets) {
             self.metrics.mev_dropped += len;
         }
     }

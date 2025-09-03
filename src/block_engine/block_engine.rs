@@ -69,7 +69,8 @@ impl BlockEngineImpl {
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        delay_packet_receiver: Receiver<PacketBatch>,
+        packet_receiver: Receiver<PacketBatch>,
+        mev_packet_receiver: Receiver<PacketBatch>,
         identity_pubkey: Pubkey,
         exit: Arc<AtomicBool>,
     ) -> (Self, JoinHandle<()>) {
@@ -87,7 +88,8 @@ impl BlockEngineImpl {
                 .spawn(move || {
                     let res = Self::run_event_loop(
                         subscription_receiver,
-                        delay_packet_receiver,
+                        packet_receiver,
+                        mev_packet_receiver,
                         exit,
                         &packet_subscriptions,
                         &bundle_subscriptions,
@@ -109,17 +111,22 @@ impl BlockEngineImpl {
     #[allow(clippy::too_many_arguments)]
     fn run_event_loop(
         subscription_receiver: Receiver<Subscription>,
-        delay_packet_receiver: Receiver<PacketBatch>,
+        packet_receiver: Receiver<PacketBatch>,
+        mev_packet_receiver: Receiver<PacketBatch>,
         exit: Arc<AtomicBool>,
         packet_subscriptions: &PacketSubscriptions,
         bundle_subscriptions: &BundleSubscriptions,
     ) -> BlockEngineResult<()> {
         while !exit.load(Ordering::Relaxed) {
             crossbeam_channel::select! {
-                recv(delay_packet_receiver) -> maybe_packet_batches => {
-                    let failed_forwards = Self::forward_packets(maybe_packet_batches, packet_subscriptions, bundle_subscriptions)?;
+                recv(packet_receiver) -> maybe_packet_batches => {
+                    let failed_forwards = Self::forward_regular_packets(maybe_packet_batches, packet_subscriptions)?;
                     Self::drop_connections(failed_forwards, packet_subscriptions);
                 },
+                recv(mev_packet_receiver) -> maybe_mev_packet_batches => {
+                    let failed_forwards = Self::forward_mev_packets(maybe_mev_packet_batches, bundle_subscriptions)?;
+                    Self::drop_connections(failed_forwards, bundle_subscriptions);
+                }
                 recv(subscription_receiver) -> maybe_subscription => {
                     Self::handle_subscription(maybe_subscription, packet_subscriptions, bundle_subscriptions)?;
                 }
@@ -128,93 +135,102 @@ impl BlockEngineImpl {
         Ok(())
     }
 
-    fn drop_connections(disconnected_pubkeys: Vec<Pubkey>, subscriptions: &PacketSubscriptions) {
+    fn drop_connections<T>(
+        disconnected_pubkeys: Vec<Pubkey>,
+        subscriptions: &Arc<RwLock<HashMap<Pubkey, TokioSender<Result<T, Status>>>>>,
+    ) {
         let mut l_subscriptions = subscriptions.write().unwrap();
         for disconnected in disconnected_pubkeys {
             l_subscriptions.remove(&disconnected);
         }
     }
 
-    /// Returns pubkeys of subscribers that failed to send
-    fn forward_packets(
+    fn forward_regular_packets(
         maybe_packet_batch: Result<PacketBatch, RecvError>,
         packet_subscriptions: &PacketSubscriptions,
-        bundle_subscriptions: &BundleSubscriptions,
     ) -> BlockEngineResult<Vec<Pubkey>> {
         let batch = maybe_packet_batch?;
-        // Partition into two Vecs of proto packets
-        let (p3_pkts, mev_pkts) =
-            batch
-                .into_iter()
-                .fold((Vec::new(), Vec::new()), |(mut p3, mut mev), pkt| {
-                    let pkt = match pkt {
-                        PacketRef::Packet(pkt) => pkt.clone(),
-                        PacketRef::Bytes(pkt) => {
-                            let src = pkt.data(..).unwrap();
-                            let mut dst = [0; PACKET_DATA_SIZE];
-
-                            dst[..src.len()].copy_from_slice(&src[..]);
-
-                            Packet::new(dst, pkt.meta().clone())
-                        }
-                    };
-                    let proto = packet_to_proto_packet(&pkt);
-                    if pkt.meta().is_p3() {
-                        p3.extend(proto.clone())
-                    }
-                    if pkt.meta().is_mev() {
-                        mev.extend(proto)
-                    }
-                    (p3, mev)
-                });
+        let proto_packets = batch.into_iter().fold(Vec::new(), |mut acc, pkt| {
+            let pkt = match pkt {
+                PacketRef::Packet(pkt) => pkt.clone(),
+                PacketRef::Bytes(pkt) => {
+                    let src = pkt.data(..).unwrap();
+                    let mut dst = [0; PACKET_DATA_SIZE];
+                    dst[..src.len()].copy_from_slice(src);
+                    Packet::new(dst, pkt.meta().clone())
+                }
+            };
+            acc.extend(packet_to_proto_packet(&pkt));
+            acc
+        });
 
         let now_ts = Timestamp::from(SystemTime::now());
-        let batch = proto_packets_to_batch(p3_pkts).unwrap_or_default();
+        let packet_batch_proto = proto_packets_to_batch(proto_packets).unwrap_or_default();
         let packet_resp = {
-            let batch = batch.clone();
+            let batch_clone = packet_batch_proto.clone();
             let ts = now_ts.clone();
             move |_: &Pubkey| SubscribePacketsResponse {
                 header: Some(Header {
                     ts: Some(ts.clone()),
                 }),
-                batch: Some(batch.clone()),
+                batch: Some(batch_clone.clone()),
             }
         };
-        let bundle = proto_packets_to_bundle(mev_pkts, now_ts, String::new()).unwrap_or_default();
-        let bundle_resp = move |_: &Pubkey| SubscribeBundlesResponse {
-            bundles: vec![bundle.clone()],
-        };
-
-        // Generic broadcaster
-        fn broadcast<T, F>(
-            senders: Vec<(&Pubkey, &TokioSender<Result<T, Status>>)>,
-            make: F,
-        ) -> Vec<Pubkey>
-        where
-            F: Fn(&Pubkey) -> T,
-        {
-            let mut failed = Vec::new();
-            for (pk, tx) in senders {
-                match tx.try_send(Ok(make(pk))) {
-                    Ok(_) => {}
-                    Err(TrySendError::Full(_)) => {}
-                    Err(TrySendError::Closed(_)) => failed.push(*pk),
-                }
-            }
-            failed
-        }
 
         let mut failed = Vec::new();
-
-        let l_senders = packet_subscriptions.read().unwrap();
-        let senders = l_senders.iter().collect::<Vec<_>>();
-        failed.extend(broadcast(senders, packet_resp));
-
-        let l_senders = bundle_subscriptions.read().unwrap();
-        let senders = l_senders.iter().collect::<Vec<_>>();
-        failed.extend(broadcast(senders, bundle_resp));
-
+        Self::broadcast_into(&mut failed, packet_subscriptions, packet_resp);
         Ok(failed)
+    }
+
+    fn forward_mev_packets(
+        maybe_mev_batch: Result<PacketBatch, RecvError>,
+        bundle_subscriptions: &BundleSubscriptions,
+    ) -> BlockEngineResult<Vec<Pubkey>> {
+        let batch = maybe_mev_batch?;
+        // Convert all packets in the batch to proto packets.
+        let mev_pkts = batch
+            .into_iter()
+            .map(|pkt| {
+                let pkt = match pkt {
+                    PacketRef::Packet(pkt) => pkt.clone(),
+                    PacketRef::Bytes(pkt) => {
+                        let src = pkt.data(..).unwrap();
+                        let mut dst = [0; PACKET_DATA_SIZE];
+                        dst[..src.len()].copy_from_slice(src);
+                        Packet::new(dst, pkt.meta().clone())
+                    }
+                };
+                packet_to_proto_packet(&pkt)
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+
+        let now_ts = Timestamp::from(SystemTime::now());
+        let bundle_proto =
+            proto_packets_to_bundle(mev_pkts, now_ts, String::new()).unwrap_or_default();
+        let bundle_resp = move |_: &Pubkey| SubscribeBundlesResponse {
+            bundles: vec![bundle_proto.clone()],
+        };
+        let mut failed = Vec::new();
+        Self::broadcast_into(&mut failed, bundle_subscriptions, bundle_resp);
+        Ok(failed)
+    }
+
+    fn broadcast_into<T, F>(
+        failed: &mut Vec<Pubkey>,
+        subs: &Arc<RwLock<HashMap<Pubkey, TokioSender<Result<T, Status>>>>>,
+        make: F,
+    ) where
+        F: Fn(&Pubkey) -> T,
+    {
+        let l = subs.read().unwrap();
+        for (pk, tx) in l.iter() {
+            match tx.try_send(Ok(make(pk))) {
+                Ok(_) => {}
+                Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Closed(_)) => failed.push(*pk),
+            }
+        }
     }
 
     fn handle_subscription(
