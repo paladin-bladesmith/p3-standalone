@@ -9,7 +9,7 @@ use {
         block_engine::{
             block_engine_validator_server::BlockEngineValidator, BlockBuilderFeeInfoRequest,
             BlockBuilderFeeInfoResponse, SubscribeBundlesRequest, SubscribeBundlesResponse,
-            SubscribePacketsRequest, SubscribePacketsResponse,
+            SubscribePacketsRequest, SubscribePacketsResponse, GetBlockEngineEndpointRequest, GetBlockEngineEndpointResponse
         },
         shared::Header,
     },
@@ -332,5 +332,13 @@ impl BlockEngineValidator for BlockEngineImpl {
             pubkey: self.identity_pubkey.to_string(),
             commission: 0,
         }))
+    }
+
+    async fn get_block_engine_endpoints(
+        &self,
+        _request: Request<GetBlockEngineEndpointRequest>,
+    ) -> Result<Response<GetBlockEngineEndpointResponse>, Status> {
+        // Return default response for endpoints (no endpoints configured)
+        Ok(Response::new(GetBlockEngineEndpointResponse::default()))
     }
 }
