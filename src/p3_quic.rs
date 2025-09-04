@@ -1,30 +1,17 @@
 use {
-    crossbeam_channel::{RecvError, TrySendError},
-    log::{debug, info, trace, warn},
-    paladin_lockup_program::state::LockupPool,
-    solana_account::ReadableAccount,
-    solana_keypair::Keypair,
-    solana_metrics::datapoint_info,
-    solana_perf::packet::PacketBatch,
-    solana_poh::poh_recorder::PohRecorder,
-    solana_pubkey::{pubkey, Pubkey},
-    solana_sdk::account::AccountSharedData,
-    solana_streamer::{
+    crossbeam_channel::{RecvError, TrySendError}, log::{debug, info, trace, warn}, paladin_lockup_program::state::LockupPool, solana_account::ReadableAccount, solana_commitment_config::CommitmentConfig, solana_keypair::Keypair, solana_metrics::datapoint_info, solana_perf::packet::PacketBatch, solana_poh::poh_recorder::PohRecorder, solana_pubkey::{Pubkey, pubkey}, solana_sdk::account::AccountSharedData, solana_streamer::{
         nonblocking::quic::{ConnectionPeerType, ConnectionTable},
         quic::{EndpointKeyUpdater, QuicServerParams, QuicVariant, SpawnServerResult},
         streamer::StakedNodes,
-    },
-    spl_discriminator::discriminator::SplDiscriminate,
-    std::{
+    }, spl_discriminator::discriminator::SplDiscriminate, std::{
         collections::HashMap,
         net::{SocketAddr, UdpSocket},
         num::Saturating,
         sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc, Mutex, RwLock,
+            Arc, Mutex, RwLock, atomic::{AtomicBool, Ordering}
         },
         time::{Duration, Instant},
-    },
+    }
 };
 
 const MAX_STAKED_CONNECTIONS: usize = 256;
@@ -84,7 +71,7 @@ where
         } = solana_streamer::quic::spawn_server(
             "p3Quic-streamer",
             "p3_quic",
-            socket_regular,
+            [socket_regular],
             keypair,
             // NB: Packets are verified using the usual TPU lane.
             reg_packet_tx,
@@ -94,6 +81,8 @@ where
                 variant: QuicVariant::P3,
                 max_staked_connections: MAX_STAKED_CONNECTIONS,
                 max_unstaked_connections: 0,
+                                max_connections_per_ipaddr_per_min: 999999,
+                max_connections_per_peer: 999999,
                 // NB: This must be 1 second for the `P3_RATE_LIMIT` const to be valid.
                 stream_throttling_interval_ms: 1000,
                 ..Default::default()
@@ -110,7 +99,7 @@ where
         } = solana_streamer::quic::spawn_server(
             "p3Quic-streamer",
             "p3_quic",
-            socket_mev,
+            [socket_mev],
             keypair,
             // NB: Packets are verified using the usual TPU lane.
             mev_packet_tx,
@@ -120,6 +109,8 @@ where
                 variant: QuicVariant::Mev,
                 max_staked_connections: MAX_STAKED_CONNECTIONS,
                 max_unstaked_connections: 0,
+                                max_connections_per_ipaddr_per_min: 999999,
+                max_connections_per_peer: 999999,
                 // NB: This must be 1 second for the `P3_RATE_LIMIT` const to be valid.
                 stream_throttling_interval_ms: 1000,
                 ..Default::default()
@@ -206,7 +197,6 @@ where
         self.metrics.p3_forwarded += len;
 
         for mut packet in packets.iter_mut() {
-            packet.meta_mut().set_p3(true);
             // NB: Unset the staked node flag to prevent forwarding.
             packet.meta_mut().set_from_staked_node(false);
         }
@@ -223,7 +213,6 @@ where
 
         // Set drop on revert flag.
         for mut packet in packets.iter_mut() {
-            packet.meta_mut().set_mev(true);
             // NB: Unset the staked node flag to prevent forwarding.
             packet.meta_mut().set_from_staked_node(false);
         }
@@ -238,6 +227,23 @@ where
         // Load the lockup pool account.
         let Some(pool) = self.accounts.get_account(&POOL_KEY) else {
             warn!("Lockup pool does not exist; pool={POOL_KEY}");
+
+            let mut stakes: HashMap<Pubkey, u64> = HashMap::new();
+            stakes.insert(
+                Pubkey::from_str_const("3wWrxQNpmGRzaVYVCCGEVLV6GMHG4Vvzza4iT79atw5A"),
+                100_000_000_000,
+            );
+            stakes.insert(
+                Pubkey::from_str_const("E9Gr9GmYTB9eEYr44VMhfZh9LRVYzppD94UrcgQubTrG"),
+                100_000_000_000,
+            );
+            stakes.insert(
+                Pubkey::from_str_const("8qd7amWkGNcNiDGDMqF9MJYV78gRDdNx7F8XweBgatVi"),
+                100_000_000_000,
+            );
+            let stakes = Arc::new(stakes);
+            *self.staked_nodes.write().unwrap() =
+                StakedNodes::new(stakes.clone(), HashMap::default());
 
             return;
         };
@@ -330,7 +336,7 @@ impl AccountFetch for Arc<solana_client::rpc_client::RpcClient> {
     fn get_account(&self, key: &Pubkey) -> Option<AccountSharedData> {
         self.get_account_with_commitment(
             key,
-            solana_sdk::commitment_config::CommitmentConfig::confirmed(),
+            CommitmentConfig::confirmed(),
         )
         .ok()
         .and_then(|rep| rep.value.map(Into::into))

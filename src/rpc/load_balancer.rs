@@ -1,21 +1,11 @@
 use {
-    crossbeam_channel::RecvTimeoutError,
-    dashmap::DashMap,
-    log::{error, info},
-    solana_client::{pubsub_client::PubsubClient, rpc_client::RpcClient},
-    solana_metrics::{datapoint_error, datapoint_info},
-    solana_sdk::{
-        clock::Slot,
-        commitment_config::{CommitmentConfig, CommitmentLevel},
-    },
-    std::{
+    crossbeam_channel::RecvTimeoutError, dashmap::DashMap, log::{error, info}, solana_client::{pubsub_client::PubsubClient, rpc_client::RpcClient}, solana_commitment_config::{CommitmentConfig, CommitmentLevel}, solana_metrics::{datapoint_error, datapoint_info}, solana_sdk::clock::Slot, std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, atomic::{AtomicBool, Ordering}
         },
-        thread::{self, sleep, Builder, JoinHandle},
+        thread::{self, Builder, JoinHandle, sleep},
         time::{Duration, Instant},
-    },
+    }
 };
 
 pub struct LoadBalancer {

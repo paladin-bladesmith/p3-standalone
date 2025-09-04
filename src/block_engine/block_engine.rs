@@ -16,8 +16,8 @@ use {
     log::*,
     prost_types::Timestamp,
     solana_perf::packet::{PacketBatch, PacketRef},
+    solana_packet::{Packet, PACKET_DATA_SIZE},
     solana_sdk::{
-        packet::{Packet, PACKET_DATA_SIZE},
         pubkey::Pubkey,
     },
     std::{
@@ -146,7 +146,7 @@ impl BlockEngineImpl {
         let (p3_pkts, mev_pkts) =
             batch
                 .into_iter()
-                .fold((Vec::new(), Vec::new()), |(mut p3, mut mev), pkt| {
+                .fold((Vec::new(), Vec::new()), |(p3, mut mev), pkt| {
                     let pkt = match pkt {
                         PacketRef::Packet(pkt) => pkt.clone(),
                         PacketRef::Bytes(pkt) => {
@@ -159,12 +159,9 @@ impl BlockEngineImpl {
                         }
                     };
                     let proto = packet_to_proto_packet(&pkt);
-                    if pkt.meta().is_p3() {
-                        p3.extend(proto.clone())
-                    }
-                    if pkt.meta().is_mev() {
-                        mev.extend(proto)
-                    }
+                    
+                        mev.extend(proto);
+                    
                     (p3, mev)
                 });
 
@@ -213,6 +210,8 @@ impl BlockEngineImpl {
         let l_senders = bundle_subscriptions.read().unwrap();
         let senders = l_senders.iter().collect::<Vec<_>>();
         failed.extend(broadcast(senders, bundle_resp));
+
+        error!("Failed: {failed:?}");
 
         Ok(failed)
     }
