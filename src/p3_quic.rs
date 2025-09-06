@@ -238,7 +238,7 @@ where
                 100_000_000_000,
             );
             stakes.insert(
-                Pubkey::from_str_const("8qd7amWkGNcNiDGDMqF9MJYV78gRDdNx7F8XweBgatVi"),
+                Pubkey::from_str_const("C7GNYcBDL7AKg2xpdDha2yBXJAGx6MHhDpdJ6WuyHxSr"),
                 100_000_000_000,
             );
             let stakes = Arc::new(stakes);
