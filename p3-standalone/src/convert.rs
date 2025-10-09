@@ -1,14 +1,15 @@
-use jito_protos::proto::{
-    bundle::Bundle as ProtoBundle,
-    bundle::BundleUuid as ProtoBundleUuid,
-    packet::{
-        Meta as ProtoMeta, Packet as ProtoPacket, PacketBatch as ProtoPacketBatch,
-        PacketFlags as ProtoPacketFlags,
+use {
+    jito_protos::proto::{
+        bundle::{Bundle as ProtoBundle, BundleUuid as ProtoBundleUuid},
+        packet::{
+            Meta as ProtoMeta, Packet as ProtoPacket, PacketBatch as ProtoPacketBatch,
+            PacketFlags as ProtoPacketFlags,
+        },
+        shared::Header,
     },
-    shared::Header,
+    prost_types::Timestamp,
+    solana_perf::packet::Packet,
 };
-use prost_types::Timestamp;
-use solana_perf::packet::Packet;
 
 pub fn packet_to_proto_packet(p: &Packet) -> Option<ProtoPacket> {
     Some(ProtoPacket {

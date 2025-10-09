@@ -1,8 +1,10 @@
-use super::auth_interceptor::Claims;
-use chrono::{NaiveDateTime, Utc};
-use keyed_priority_queue::KeyedPriorityQueue;
-use std::{cmp::Reverse, net::IpAddr, sync::Arc};
-use tokio::sync::Mutex;
+use {
+    super::auth_interceptor::Claims,
+    chrono::{NaiveDateTime, Utc},
+    keyed_priority_queue::KeyedPriorityQueue,
+    std::{cmp::Reverse, net::IpAddr, sync::Arc},
+    tokio::sync::Mutex,
+};
 
 #[derive(Clone)]
 pub(crate) struct AuthChallenge {

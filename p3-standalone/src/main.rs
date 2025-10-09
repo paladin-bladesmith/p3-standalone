@@ -1,6 +1,7 @@
 mod args;
 mod block_engine;
 mod convert;
+mod p3_quic;
 mod rpc;
 
 use {
@@ -116,10 +117,12 @@ async fn main() {
 
     // Create packet forwarding channel - broadcast so all validators get all packets
     let (p3_packet_tx, p3_packet_rx) = bounded(LoadBalancer::SLOT_QUEUE_CAPACITY);
+    let (p3_mev_packet_tx, p3_mev_packet_rx) = bounded(LoadBalancer::SLOT_QUEUE_CAPACITY);
 
     let (p3_handle, _key_updaters) = p3_quic::P3Quic::spawn(
         exit.clone(),
         p3_packet_tx,
+        p3_mev_packet_tx,
         rpc_load_balancer.clone().rpc_client().clone(),
         &keypair,
         (args.p3_addr, args.p3_mev_addr),
@@ -138,8 +141,12 @@ async fn main() {
     });
 
     // Create BlockEngine service
-    let (block_engine_svc, block_engine_handle) =
-        BlockEngineImpl::new(p3_packet_rx, keypair.pubkey(), exit.clone());
+    let (block_engine_svc, block_engine_handle) = BlockEngineImpl::new(
+        p3_packet_rx,
+        p3_mev_packet_rx,
+        keypair.pubkey(),
+        exit.clone(),
+    );
 
     let auth_svc = AuthServiceImpl::new(
         (),
