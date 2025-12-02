@@ -96,7 +96,7 @@ where
                 max_staked_connections: MAX_STAKED_CONNECTIONS,
                 max_unstaked_connections: 99999,
                 max_connections_per_ipaddr_per_min: 999999,
-max_connections_per_peer: 999999,
+                max_connections_per_peer: 999999,
                 // NB: This must be 1 second for the `P3_RATE_LIMIT` const to be valid.
                 stream_throttling_interval_ms: 1000,
                 ..Default::default()
@@ -124,7 +124,7 @@ max_connections_per_peer: 999999,
                 max_staked_connections: MAX_STAKED_CONNECTIONS,
                 max_unstaked_connections: 99999,
                 max_connections_per_ipaddr_per_min: 999999,
-max_connections_per_peer: 999999,
+                max_connections_per_peer: 999999,
                 // NB: This must be 1 second for the `P3_RATE_LIMIT` const to be valid.
                 stream_throttling_interval_ms: 1000,
                 ..Default::default()
@@ -239,64 +239,50 @@ max_connections_per_peer: 999999,
 
     fn update_staked_nodes(&mut self) {
         // Load the lockup pool account.
-        // let Some(pool) = self.accounts.get_account(&POOL_KEY) else {
-        //     warn!("Lockup pool does not exist; pool={POOL_KEY}");
+        let Some(pool) = self.accounts.get_account(&POOL_KEY) else {
+            warn!("Lockup pool does not exist; pool={POOL_KEY}");
 
-        //     return;
-        // };
+            return;
+        };
 
-        // // Try to deserialize the pool.
-        // let Some(pool) = Self::try_deserialize_lockup_pool(pool.data()) else {
-        //     warn!("Failed to deserialize lockup pool; pool={POOL_KEY}");
+        // Try to deserialize the pool.
+        let Some(pool) = Self::try_deserialize_lockup_pool(pool.data()) else {
+            warn!("Failed to deserialize lockup pool; pool={POOL_KEY}");
 
-        //     return;
-        // };
+            return;
+        };
 
-        // // Setup a new staked nodes map.
-        // let mut stake_total = 0;
-        // let stakes = pool
-        //     .entries
-        //     .iter()
-        //     .take_while(|entry| {
-        //         stake_total += entry.amount;
+        // Setup a new staked nodes map.
+        let mut stake_total = 0;
+        let stakes = pool
+            .entries
+            .iter()
+            .take_while(|entry| {
+                stake_total += entry.amount;
 
-        //         // Take while lockup is initialized and the locked amount exceeds
-        //         // 1% of total stake.
-        //         entry.lockup != Pubkey::default()
-        //             && entry.amount > 0
-        //             && entry.amount * 100 / stake_total > 1
-        //     })
-        //     .filter(|entry| entry.metadata != [0; 32])
-        //     .map(|entry| (Pubkey::new_from_array(entry.metadata), entry.amount))
-        //     .fold(
-        //         HashMap::with_capacity(pool.entries_len),
-        //         |mut map, (key, stake)| {
-        //             *map.entry(key).or_default() += stake;
+                // Take while lockup is initialized and the locked amount exceeds
+                // 1% of total stake.
+                entry.lockup != Pubkey::default()
+                    && entry.amount > 0
+                    && entry.amount * 100 / stake_total > 1
+            })
+            .filter(|entry| entry.metadata != [0; 32])
+            .map(|entry| (Pubkey::new_from_array(entry.metadata), entry.amount))
+            .fold(
+                HashMap::with_capacity(pool.entries_len),
+                |mut map, (key, stake)| {
+                    *map.entry(key).or_default() += stake;
 
-        //             map
-        //         },
-        //     );
-        // let stakes = Arc::new(stakes);
-        // debug!("Updated stakes; stakes={stakes:?}");
-
-        // // Swap the old for the new.
-        // *self.staked_nodes.write().unwrap() = StakedNodes::new(stakes.clone(), HashMap::default());
-
-                let mut stakes: HashMap<Pubkey, u64> = HashMap::new();
-
-        stakes.insert(
-            Pubkey::from_str_const("3wWrxQNpmGRzaVYVCCGEVLV6GMHG4Vvzza4iT79atw5A"),
-            100_000_000_000,
-        );
-        stakes.insert(
-            Pubkey::from_str_const("3wWrxQNpmGRzaVYVCCGEVLV6GMHG4Vvzza4iT79atw5B"),
-            100_000_000_000,
-        );
+                    map
+                },
+            );
         let stakes = Arc::new(stakes);
-        *self.staked_nodes.write().unwrap() =
-            StakedNodes::new(stakes.clone(), HashMap::default());
+        debug!("Updated stakes; stakes={stakes:?}");
 
-                // Purge all connections where their stake no longer matches.
+        // Swap the old for the new.
+        *self.staked_nodes.write().unwrap() = StakedNodes::new(stakes.clone(), HashMap::default());
+
+        // Purge all connections where their stake no longer matches.
         let connection_table_l = self.staked_connection_table.lock().unwrap();
         for connection in connection_table_l.table().values().flatten() {
             match connection.peer_type {

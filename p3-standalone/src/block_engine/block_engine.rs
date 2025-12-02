@@ -8,8 +8,9 @@ use {
     jito_protos::proto::{
         block_engine::{
             block_engine_validator_server::BlockEngineValidator, BlockBuilderFeeInfoRequest,
-            BlockBuilderFeeInfoResponse, SubscribeBundlesRequest, SubscribeBundlesResponse,
-            SubscribePacketsRequest, SubscribePacketsResponse, GetBlockEngineEndpointRequest, GetBlockEngineEndpointResponse
+            BlockBuilderFeeInfoResponse, GetBlockEngineEndpointRequest,
+            GetBlockEngineEndpointResponse, SubscribeBundlesRequest, SubscribeBundlesResponse,
+            SubscribePacketsRequest, SubscribePacketsResponse,
         },
         shared::Header,
     },
