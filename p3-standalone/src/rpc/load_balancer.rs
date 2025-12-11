@@ -1,13 +1,13 @@
+#![allow(dead_code)]
 use {
     crossbeam_channel::RecvTimeoutError,
     dashmap::DashMap,
     log::{error, info},
-    solana_client::{pubsub_client::PubsubClient, rpc_client::RpcClient},
-    solana_metrics::{datapoint_error, datapoint_info},
-    solana_sdk::{
-        clock::Slot,
-        commitment_config::{CommitmentConfig, CommitmentLevel},
+    solana_client::{
+        pubsub_client::PubsubClient, rpc_client::RpcClient, rpc_config::CommitmentConfig,
     },
+    solana_metrics::{datapoint_error, datapoint_info},
+    solana_sdk::clock::Slot,
     std::{
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -43,9 +43,7 @@ impl LoadBalancer {
             let rpc_client = Arc::new(RpcClient::new_with_timeout_and_commitment(
                 rpc_url,
                 Self::RPC_TIMEOUT,
-                CommitmentConfig {
-                    commitment: CommitmentLevel::Processed,
-                },
+                CommitmentConfig::processed(),
             ));
             if let Err(e) = rpc_client.get_slot() {
                 error!("error warming up rpc: {rpc_url}. error: {e}");

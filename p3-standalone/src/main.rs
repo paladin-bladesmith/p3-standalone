@@ -20,15 +20,13 @@ use {
     jwt::{AlgorithmType, PKeyWithDigest},
     openssl::{hash::MessageDigest, pkey::PKey, rsa::Rsa},
     rpc::load_balancer::LoadBalancer,
-    solana_sdk::{
-        pubkey::Pubkey,
-        signature::{read_keypair_file, Keypair},
-        signer::Signer,
-    },
+    solana_keypair::{read_keypair_file, Keypair, Signer},
+    solana_sdk::pubkey::Pubkey,
     std::{
         sync::{atomic::AtomicBool, Arc},
         time::Duration,
     },
+    tokio_util::sync::CancellationToken,
     tonic::transport::Server,
     tracing::{error, info, warn},
 };
@@ -102,28 +100,18 @@ async fn main() {
         keypair.pubkey()
     ));
 
-    // Setup RPC load balancer for slot updates
-    let servers = args
-        .rpc_servers
-        .into_iter()
-        .zip(args.websocket_servers)
-        .collect::<Vec<_>>();
-
     let exit = Arc::new(AtomicBool::new(false));
-
-    let rpc_load_balancer = LoadBalancer::new(&servers, &exit);
-
-    let rpc_load_balancer = Arc::new(rpc_load_balancer);
 
     // Create packet forwarding channel - broadcast so all validators get all packets
     let (p3_packet_tx, p3_packet_rx) = bounded(LoadBalancer::SLOT_QUEUE_CAPACITY);
     let (p3_mev_packet_tx, p3_mev_packet_rx) = bounded(LoadBalancer::SLOT_QUEUE_CAPACITY);
 
+    let cancel = CancellationToken::new();
     let (p3_handle, _key_updaters) = p3_quic::P3Quic::spawn(
+        cancel,
         exit.clone(),
         p3_packet_tx,
         p3_mev_packet_tx,
-        rpc_load_balancer.clone().rpc_client().clone(),
         &keypair,
         (args.p3_addr, args.p3_mev_addr),
     );
